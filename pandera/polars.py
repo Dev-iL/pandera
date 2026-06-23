@@ -1,5 +1,12 @@
 """A flexible and expressive polars validation library for Python."""
 
+# Eagerly register the polars builtin-check *functions* (name -> dispatcher) in
+# the shared CHECK_FUNCTION_REGISTRY so ``pa.Check.ge(0)`` and friends resolve at
+# construction time, even in a polars-only env where pandas/numpy are absent and
+# ``import pandera`` therefore never populated the registry via the pandas path.
+# This imports check functions only; validation *backends* stay lazily registered
+# (toggleable via set_config) per the registration design.
+import pandera.backends.polars.builtin_checks  # noqa: F401
 from pandera import config, errors
 from pandera.api.checks import Check
 from pandera.api.dataframe.model_components import (

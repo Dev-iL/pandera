@@ -115,6 +115,12 @@ jobs:
         run: |
           python -c "import pandera.polars; print('SUCCESS: pandera.polars imported without pandas')"
 
+      # Beyond a bare import: build a schema with builtin checks and validate a
+      # frame, so the #2387 / #2291 regression class (builtin checks unregistered
+      # without pandas) fails CI rather than passing a blind import smoke test.
+      - name: Test pandera.polars builtin checks without pandas
+        run: python scripts/polars_no_pandas_check.py
+
   # test base functionality
   unit-tests-base:
     name: >

@@ -413,6 +413,10 @@ class ColumnBackend(PolarsSchemaBackend):
                         schema.selector,
                     )
                 )
+            except ImportError:
+                # A missing-dependency error is an environment problem, not a
+                # check failure — surface it instead of recording it as one.
+                raise
             except Exception as err:
                 # catch other exceptions that may occur when executing the Check
                 err_msg = f'"{err.args[0]}"' if err.args else ""

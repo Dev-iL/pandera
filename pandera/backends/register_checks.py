@@ -37,16 +37,10 @@ def register_default_check_backends(check_obj_cls: type) -> None:
             pass
         return
 
-    from pandera.api.pandas.types import get_backend_types_from_mro
-
-    if get_backend_types_from_mro(check_obj_cls) is not None:
-        from pandera.api.pandas.container import (
-            DataFrameSchema as PandasDataFrameSchema,
-        )
-
-        PandasDataFrameSchema.register_default_backends(check_obj_cls)
-        return
-
+    # Evaluate the cheap native module-prefix branches before importing
+    # ``pandera.api.pandas.types`` (which imports numpy/pandas at module top).
+    # A non-pandas frame must never force a pandas/numpy import, mirroring the
+    # early-return style of the ``narwhals.`` branch above.
     if module.startswith("polars."):
         from pandera.backends.polars.register import register_polars_backends
         from pandera.config import CONFIG
@@ -65,7 +59,11 @@ def register_default_check_backends(check_obj_cls: type) -> None:
         )
         return
 
-    if module.startswith("pyspark"):
+    # Only native Spark SQL / Spark Connect frames (``pyspark.sql.*``) use the
+    # PySpark backends. Pandas-on-Spark frames (``pyspark.pandas.*``) share the
+    # pandas-like API and must fall through to the pandas MRO branch below — see
+    # ``register_pyspark_backends`` and ``pandera.backends.pandas.register``.
+    if module.startswith("pyspark.sql"):
         from pandera.backends.pyspark.register import (
             register_pyspark_backends,
         )
@@ -80,4 +78,16 @@ def register_default_check_backends(check_obj_cls: type) -> None:
         from pandera.backends.xarray.register import register_xarray_backends
 
         register_xarray_backends()
+        return
+
+    # Fallback for genuine pandas-like frames: route via the MRO check, which
+    # imports pandas/numpy. Only reached for frames not matched above.
+    from pandera.api.pandas.types import get_backend_types_from_mro
+
+    if get_backend_types_from_mro(check_obj_cls) is not None:
+        from pandera.api.pandas.container import (
+            DataFrameSchema as PandasDataFrameSchema,
+        )
+
+        PandasDataFrameSchema.register_default_backends(check_obj_cls)
         return
