@@ -1,6 +1,7 @@
 """Unit tests for Polars dataframe model."""
 
 import sys
+import warnings
 from datetime import datetime
 from typing import Optional
 
@@ -17,7 +18,7 @@ from polars.testing.parametric import column, dataframes
 
 import pandera.engines.polars_engine as pe
 from pandera.config import CONFIG
-from pandera.errors import SchemaError
+from pandera.errors import ParserError, SchemaError, SchemaErrors
 from pandera.polars import (
     Column,
     DataFrameModel,
@@ -437,3 +438,152 @@ def test_annotated_field_no_metadata_dedup():
     assert schema_b.columns["value"].title == "ID"
     # ModelB should not have inherited ModelA's range checks.
     assert schema_b.columns["value"].checks == []
+
+
+@pytest.fixture
+def simulate_polars_1_42_1(monkeypatch):
+    """Make ``pl.concat`` and ``polars_version`` behave like polars>=1.42.1:
+    ``how="horizontal"`` warns, ``how="horizontal_extend"`` is silent and
+    keeps today's padding behavior.
+
+    The real polars>=1.42.1 DeprecationWarning pandera's 5 internal
+    ``pl.concat`` call sites must avoid isn't reachable on the polars
+    actually installed in dev/CI (pinned below 1.42.1, see
+    noxfile.py::POLARS_VERSIONS), so this simulates it -- making tests that
+    use this fixture fail on a reverted fix regardless of which polars is
+    actually installed.
+    """
+    monkeypatch.setattr(
+        pe, "polars_version", lambda: pe.version.parse("1.42.1")
+    )
+
+    orig_concat = pl.concat
+
+    def _simulate_polars_1_42_1_concat(*args, **kwargs):
+        how = kwargs.get("how")
+        if how == "horizontal":
+            warnings.warn(
+                "the default behavior of how='horizontal' for concat is "
+                "deprecated and will require equal heights in the next "
+                "breaking release. Use how='horizontal_extend' to keep "
+                "the current behavior.",
+                DeprecationWarning,
+            )
+        elif how == "horizontal_extend":
+            kwargs = dict(kwargs)
+            kwargs["how"] = "horizontal"
+        return orig_concat(*args, **kwargs)
+
+    monkeypatch.setattr(pl, "concat", _simulate_polars_1_42_1_concat)
+
+
+def test_isin_check_lazy_validation_no_deprecation_warning(
+    simulate_polars_1_42_1,
+):
+    """Regression test for the ``checks.py`` call site: a promoted
+    DeprecationWarning must not turn a genuine ``isin`` check failure into
+    a CHECK_ERROR under lazy validation.
+    """
+
+    class Schema(DataFrameModel):
+        string_col: str = Field(isin=[*"abc"])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+
+        valid_df = pl.DataFrame({"string_col": ["a", "b", "c"]})
+        Schema.validate(valid_df, lazy=True)
+
+        invalid_df = pl.DataFrame({"string_col": ["a", "b", "z"]})
+        with pytest.raises(SchemaErrors) as exc_info:
+            Schema.validate(invalid_df, lazy=True)
+
+    message = str(exc_info.value.message)
+    assert "CHECK_ERROR" not in message, message
+    assert "DeprecationWarning" not in message, message
+    assert "isin" in message, message
+    failure_case = exc_info.value.failure_cases["failure_case"].to_list()
+    assert failure_case == ["z"], failure_case
+
+
+def test_nullable_check_lazy_validation_no_deprecation_warning(
+    simulate_polars_1_42_1,
+):
+    """Regression test for the ``components.py`` ``check_nullable`` call
+    site: a promoted DeprecationWarning must not escape a genuine
+    not-nullable failure under lazy validation.
+    """
+
+    class Schema(DataFrameModel):
+        col: str = Field(nullable=False)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(SchemaErrors) as exc_info:
+            Schema.validate(pl.DataFrame({"col": ["a", None, "c"]}), lazy=True)
+
+    message = str(exc_info.value.message)
+    assert "DeprecationWarning" not in message, message
+    assert "SERIES_CONTAINS_NULLS" in message, message
+
+
+def test_unique_check_lazy_validation_no_deprecation_warning(
+    simulate_polars_1_42_1,
+):
+    """Regression test for the ``components.py`` ``check_unique`` call
+    site: a promoted DeprecationWarning must not escape a genuine
+    uniqueness failure under lazy validation.
+    """
+
+    class Schema(DataFrameModel):
+        col: str = Field(unique=True)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(SchemaErrors) as exc_info:
+            Schema.validate(pl.DataFrame({"col": ["a", "a", "c"]}), lazy=True)
+
+    message = str(exc_info.value.message)
+    assert "DeprecationWarning" not in message, message
+    assert "SERIES_CONTAINS_DUPLICATES" in message, message
+
+
+def test_coercion_failure_no_deprecation_warning(simulate_polars_1_42_1):
+    """Regression test for the ``polars_engine.py``
+    ``polars_failure_cases_from_coercible`` call site (generic dtype
+    coercion failure path): a promoted DeprecationWarning must not escape
+    a genuine coercion failure under lazy validation.
+    """
+
+    class Schema(DataFrameModel):
+        int_col: int = Field(coerce=True)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        bad_df = pl.DataFrame({"int_col": ["a", "b", "not-a-number"]})
+        with pytest.raises(SchemaErrors) as exc_info:
+            Schema.validate(bad_df, lazy=True)
+
+    message = str(exc_info.value.message)
+    assert "DeprecationWarning" not in message, message
+    assert "DATATYPE_COERCION" in message, message
+
+
+def test_category_coercion_failure_no_deprecation_warning(
+    simulate_polars_1_42_1,
+):
+    """Regression test for the ``polars_engine.py`` ``Category.try_coerce``
+    call site: a promoted DeprecationWarning must not escape a genuine
+    invalid-category coercion failure.
+    """
+    cat_dtype = pe.Category(categories=["a", "b", "c"])
+    lf = pl.DataFrame({"col": ["a", "b", "not-a-category"]}).lazy()
+    data_container = PolarsData(lf, key="col")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(ParserError) as exc_info:
+            cat_dtype.try_coerce(data_container)
+
+    assert "DeprecationWarning" not in str(exc_info.value)
+    assert "Invalid categories" in str(exc_info.value)

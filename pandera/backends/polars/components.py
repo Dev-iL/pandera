@@ -17,6 +17,7 @@ from pandera.backends.base import CoreCheckResult
 from pandera.backends.polars.base import PolarsSchemaBackend, is_float_dtype
 from pandera.config import ValidationDepth, ValidationScope, get_config_context
 from pandera.constants import CHECK_OUTPUT_KEY
+from pandera.engines.polars_engine import polars_concat_horizontal_how
 from pandera.errors import (
     ParserError,
     SchemaDefinitionError,
@@ -277,7 +278,7 @@ class ColumnBackend(PolarsSchemaBackend):
                         check_obj,
                         isna.select(pl.col(column).alias(CHECK_OUTPUT_KEY)),
                     ],
-                    how="horizontal",
+                    how=polars_concat_horizontal_how(),  # type: ignore[arg-type]
                 )
                 .filter(pl.col(CHECK_OUTPUT_KEY).not_())
                 .select(column)
@@ -332,7 +333,7 @@ class ColumnBackend(PolarsSchemaBackend):
                                 pl.col(column).alias("_duplicated")
                             ).lazy(),
                         ],
-                        how="horizontal",
+                        how=polars_concat_horizontal_how(),  # type: ignore[arg-type]
                     )
                     .filter(pl.col("_duplicated"))
                     .select(column)

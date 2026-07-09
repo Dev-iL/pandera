@@ -52,6 +52,23 @@ def polars_version() -> version.Version:
     return version.parse(pl.__version__)
 
 
+def polars_concat_horizontal_how() -> Literal[
+    "horizontal", "horizontal_extend"
+]:
+    """Return the ``pl.concat`` ``how`` value for horizontal-stack concatenation.
+
+    polars 1.42.1 deprecated the implicit horizontal-stacking meaning of
+    ``how="horizontal"`` in favor of the explicit ``how="horizontal_extend"``
+    alias, which is not a valid literal on earlier polars versions. The
+    installed polars version's ``ConcatMethod`` type stub may not include
+    ``"horizontal_extend"`` yet, hence the ``# type: ignore[arg-type]`` at
+    every call site passing this return value to ``pl.concat``'s ``how=``.
+    """
+    if polars_version() >= version.parse("1.42.1"):
+        return "horizontal_extend"
+    return "horizontal"
+
+
 def convert_py_dtype_to_polars_dtype(dtype):
     if isinstance(dtype, DataTypeClass):
         return dtype
@@ -91,7 +108,8 @@ def polars_failure_cases_from_coercible(
     """Get the failure cases resulting from trying to coerce a polars object."""
     return (
         pl.concat(
-            items=[data_container.lazyframe, is_coercible], how="horizontal"
+            items=[data_container.lazyframe, is_coercible],
+            how=polars_concat_horizontal_how(),  # type: ignore[arg-type]
         )
         .filter(pl.col(CHECK_OUTPUT_KEY).not_())
         .collect()
@@ -837,7 +855,8 @@ class Category(DataType, dtypes.Category):
                 data_container.lazyframe, key=data_container.key
             )
             is_coercible: pl.LazyFrame = pl.concat(
-                (coercible, match_categories), how="horizontal"
+                (coercible, match_categories),
+                how=polars_concat_horizontal_how(),  # type: ignore[arg-type]
             ).select(pl.all_horizontal(CHECK_OUTPUT_KEY, "belongs"))
 
             failure_cases = polars_failure_cases_from_coercible(

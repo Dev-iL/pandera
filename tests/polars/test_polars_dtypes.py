@@ -10,6 +10,7 @@ import polars as pl
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from packaging import version
 from polars.testing import assert_frame_equal
 from polars.testing.parametric import dataframes
 
@@ -565,3 +566,27 @@ def test_polars_import_no_warnings():
         text=True,
     )
     assert result.returncode == 0, f"Import raised a warning:\n{result.stderr}"
+
+
+@pytest.mark.parametrize(
+    "installed_version,expected_how",
+    [
+        ("1.38.1", "horizontal"),
+        ("1.42.0", "horizontal"),
+        ("1.42.1", "horizontal_extend"),
+        ("1.50.0", "horizontal_extend"),
+    ],
+)
+def test_polars_concat_horizontal_how(
+    monkeypatch, installed_version, expected_how
+):
+    """polars_concat_horizontal_how() gates on the installed polars version.
+
+    polars 1.42.1 is the cutover: "horizontal_extend" isn't a valid pl.concat
+    how literal before it, and "horizontal" carries a DeprecationWarning
+    from it onward.
+    """
+    monkeypatch.setattr(
+        pe, "polars_version", lambda: version.parse(installed_version)
+    )
+    assert pe.polars_concat_horizontal_how() == expected_how
